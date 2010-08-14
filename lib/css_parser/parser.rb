@@ -15,7 +15,7 @@ module CssParser
   # [<tt>import</tt>] Follow <tt>@import</tt> rules. Boolean, default is <tt>true</tt>.
   # [<tt>io_exceptions</tt>] Throw an exception if a link can not be found. Boolean, default is <tt>true</tt>.
   class Parser
-    USER_AGENT   = "Ruby CSS Parser/#{CssParser::VERSION} (http://code.dunae.ca/css_parser/)"
+    USER_AGENT   = "Ruby CSS Parser/#{RUBY_VERSION} (http://code.dunae.ca/css_parser/)"
 
     STRIP_CSS_COMMENTS_RX = /\/\*.*?\*\//m
     STRIP_HTML_COMMENTS_RX = /\<\!\-\-|\-\-\>/m
@@ -41,6 +41,7 @@ module CssParser
     def initialize(options = {})
       @options = {:absolute_paths => false,
                   :import => true,
+                  :local => false,
                   :io_exceptions => true}.merge(options)
 
       # array of RuleSets
@@ -82,9 +83,6 @@ module CssParser
 
     # Add a raw block of CSS.
     #
-    # In order to follow +@import+ rules you must supply either a
-    # +:base_dir+ or +:base_uri+ option.
-    #
     # ==== Example
     #   css = <<-EOT
     #     body { font-size: 10pt }
@@ -100,37 +98,13 @@ module CssParser
     # TODO: add media_type
     #++
     def add_block!(block, options = {})
-      options = {:base_uri => nil, :base_dir => nil, :charset => nil, :media_types => :all}.merge(options)
+      options = {:base_uri => nil, :charset => nil, :media_types => :all}.merge(options)
       
       block = cleanup_block(block)
 
       if options[:base_uri] and @options[:absolute_paths]
         block = CssParser.convert_uris(block, options[:base_uri])
       end
-
-      # Load @imported CSS
-      block.scan(RE_AT_IMPORT_RULE).each do |import_rule|        
-        media_types = []
-        if media_string = import_rule[import_rule.length-1]
-          media_string.split(/\s|\,/).each do |t|
-            media_types << t.to_sym unless t.empty?
-          end
-        end
-
-        import_path = import_rule[1].to_s.gsub(/['"]*/, '').strip
-        
-        if options[:base_uri]
-          import_uri = URI.parse(options[:base_uri].to_s).merge(import_path)
-          load_uri!(import_uri, options[:base_uri], media_types)
-        elsif options[:base_dir]
-          load_file!(import_path, options[:base_dir], media_types)
-        end     
-      end
-
-      # Remove @import declarations
-      block.gsub!(RE_AT_IMPORT_RULE, '')
-
-
       
       parse_block_into_rule_sets!(block, options)
       
@@ -272,23 +246,45 @@ module CssParser
     # Load a remote CSS file.
     def load_uri!(uri, base_uri = nil, media_types = :all)
       base_uri = uri if base_uri.nil?
-      src, charset = read_remote_file(uri)
+      
+      if @options[:local] == false
+        src, charset = read_remote_file(uri)
+      else
+        src = IO.read( uri )
+      end
 
-      add_block!(src, {:media_types => media_types, :base_uri => base_uri})
+      # Load @imported CSS
+      src.scan(RE_AT_IMPORT_RULE).each do |import_rule|
+        
+        if @options[:local] == false
+          import_path = import_rule[1].to_s.gsub(/['"]*/, '').strip
+          import_uri = URI.parse(base_uri.to_s).merge(import_path)
+        else
+          import_uri = import_rule[1].to_s.gsub(/['"]*/, '').strip
+          if @options[:css_dir]
+            import_uri = @options[:css_dir] + "/" + import_uri
+          end
+        end
+
+        media_types = []
+        if media_string = import_rule[import_rule.length-1]
+          media_string.split(/\s|\,/).each do |t|
+            media_types << t.to_sym unless t.empty?
+          end
+        end
+
+        # Recurse
+        load_uri!(import_uri, nil, media_types)
+      end
+
+      # Remove @import declarations
+      src.gsub!(RE_AT_IMPORT_RULE, '')
+
+      # Relative paths need to be converted here
+      src = CssParser.convert_uris(src, base_uri) if base_uri and @options[:absolute_paths]
+
+      add_block!(src, {:media_types => media_types})
     end
-    
-    # Load a local CSS file.
-    def load_file!(file_name, base_dir = nil, media_types = :all)
-      file_name = File.expand_path(file_name, base_dir)
-      return unless File.readable?(file_name)
-
-      src = IO.read(file_name)
-      base_dir = File.dirname(file_name)
-
-      add_block!(src, {:media_types => media_types, :base_dir => base_dir})
-    end
-    
-    
 
   protected
     # Strip comments and clean up blank lines from a block of CSS.
