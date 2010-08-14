@@ -20,8 +20,11 @@ Done.
   # load a remote file, setting the base_uri and media_types
   parser.load_uri!('../style.css', 'http://example.com/styles/inc/', [:screen, :handheld])
   
-  # load a local file, setting the base_dir and media_types
-  parser.load_file!('print.css', '~/styles/', :print)
+  # load a local file
+	# :local => true
+	# :css_dir => the basedir for CSS files
+  css_parser = CssParser::Parser.new({:local => true, :css_dir => 'css'})
+  css_parser.load_uri!('fileName.css')
 
   # lookup a rule by a selector
   parser.find('#content')
